@@ -106,12 +106,8 @@ def test_deepseek_harness_detected_via_dsh_home(home, monkeypatch, tmp_path):
     plan = by_agent(sk.plan(sk.TARGETS, ["deepseek-harness"]))
     assert plan["deepseek-harness"]["path"] == str(custom / "skills" / sk.SKILL_NAME)
 
-def test_project_targets_includes_agent_and_agents(tmp_path):
+def test_project_targets_targets_agents(tmp_path):
     targets = sk.project_targets(tmp_path)
     target_map = {t.agent: t for t in targets}
-    assert "project-agent" in target_map
-    assert "project-agents" in target_map
-    assert "project-claude" in target_map
-    assert "project-omp" in target_map
-    assert target_map["project-agent"].skill_dir() == tmp_path / ".agent" / "skills" / sk.SKILL_NAME
+    assert list(target_map.keys()) == ["project-agents"]
     assert target_map["project-agents"].skill_dir() == tmp_path / ".agents" / "skills" / sk.SKILL_NAME
