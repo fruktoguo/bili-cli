@@ -7,9 +7,11 @@ metadata, subtitles, danmaku and the AI summary.
 from __future__ import annotations
 
 import asyncio
+import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any, Optional
-
 import httpx
 import typer
 from bilibili_api import comment, video
@@ -660,3 +662,287 @@ def summary(video_id: str = VIDEO_ARG, page: int = PAGE_OPT) -> None:
         }
 
     run(body)
+
+
+QUALITY_MAP: dict[str, int] = {
+    "8k": 127,
+    "dolby": 126,
+    "hdr": 125,
+    "4k": 120,
+    "1080p60": 116,
+    "1080p+": 112,
+    "1080p": 80,
+    "720p60": 74,
+    "720p": 64,
+    "480p": 32,
+    "360p": 16,
+}
+
+QUALITY_NAMES: dict[int, str] = {
+    127: "8K",
+    126: "Dolby Vision",
+    125: "HDR",
+    120: "4K",
+    116: "1080P 60帧",
+    112: "1080P 高码率",
+    80: "1080P 高清",
+    74: "720P 60帧",
+    64: "720P 高清",
+    32: "480P 清晰",
+    16: "360P 流畅",
+}
+
+
+def _pick_download_streams(
+    playurl: dict[str, Any], quality: str, codec: str
+) -> tuple[dict[str, Any] | None, dict[str, Any] | None, int, str]:
+    dash = playurl.get("dash") or {}
+    v_streams = dash.get("video") or []
+    a_streams = dash.get("audio") or []
+
+    if not v_streams:
+        durl = playurl.get("durl") or []
+        if durl:
+            return {"url": durl[0].get("url")}, None, int(playurl.get("quality") or 0), "durl"
+        raise BiliError("not_found", "该视频没有可用的媒体流。")
+
+    target_qn = QUALITY_MAP.get(quality.lower(), 999) if quality.lower() != "best" else 999
+    eligible_v = [s for s in v_streams if int(s.get("id") or 0) <= target_qn]
+    if not eligible_v:
+        eligible_v = v_streams
+    best_qn = max(int(s.get("id") or 0) for s in eligible_v)
+    qn_group = [s for s in eligible_v if int(s.get("id") or 0) == best_qn]
+
+    codec_prefix = {"h264": "avc1", "avc": "avc1", "hevc": "hev1", "h265": "hev1", "av1": "av01"}.get(
+        codec.lower(), "avc1"
+    )
+    matched_codec = [s for s in qn_group if str(s.get("codecs") or "").startswith(codec_prefix)]
+    v_stream = matched_codec[0] if matched_codec else qn_group[0]
+    chosen_codec = str(v_stream.get("codecs") or "unknown")
+
+    a_stream = max(a_streams, key=lambda a: int(a.get("bandwidth") or 0)) if a_streams else None
+    return v_stream, a_stream, best_qn, chosen_codec
+
+
+def _format_srt_time(sec: float) -> str:
+    h, rem = divmod(int(sec), 3600)
+    m, s = divmod(rem, 60)
+    ms = int(round((sec % 1) * 1000))
+    if ms >= 1000:
+        ms = 999
+    return f"{h:02d}:{m:02d}:{s:02d},{ms:03d}"
+
+
+def _to_srt(items: list[dict[str, Any]]) -> str:
+    lines = []
+    for idx, item in enumerate(items, 1):
+        start = _format_srt_time(float(item.get("from") or 0))
+        end = _format_srt_time(float(item.get("to") or 0))
+        content = str(item.get("content") or "").strip()
+        lines.append(f"{idx}\n{start} --> {end}\n{content}\n")
+    return "\n".join(lines)
+
+
+def _to_danmaku_xml(dms: list[Any]) -> str:
+    from xml.sax.saxutils import escape
+
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        "<i>",
+        "  <chatserver>chat.bilibili.com</chatserver>",
+        "  <chatid>0</chatid>",
+        "  <mission>0</mission>",
+        "  <maxlimit>10000</maxlimit>",
+        "  <state>0</state>",
+        "  <real_name>0</real_name>",
+        "  <source>k-v</source>",
+    ]
+    for d in dms:
+        mode_val = d.mode.value if hasattr(d.mode, "value") else int(d.mode or 1)
+        font_size = d.font_size.value if hasattr(d.font_size, "value") else int(d.font_size or 25)
+        try:
+            color_dec = int(str(d.color), 16) if isinstance(d.color, str) else int(d.color or 16777215)
+        except ValueError:
+            color_dec = 16777215
+        p_attr = f"{d.dm_time:.3f},{mode_val},{font_size},{color_dec},{int(d.send_time)},{d.pool},{d.crc32_id},{d.id_}"
+        lines.append(f'  <d p="{p_attr}">{escape(str(d.text))}</d>')
+    lines.append("</i>\n")
+    return "\n".join(lines)
+
+
+@app.command()
+def download(
+    video_id: str = VIDEO_ARG,
+    page: int = PAGE_OPT,
+    quality: str = typer.Option("best", "--quality", "-q", help="画质：best（最高画质，默认）/ 1080p / 720p / 480p / 360p。"),
+    codec: str = typer.Option("h264", "--codec", help="编码格式偏好：h264（默认）/ hevc（H.265）/ av1。"),
+    audio_only: bool = typer.Option(False, "--audio-only", "-a", help="仅下载音频轨道（.m4a 格式，免重编码）。"),
+    output_path: Optional[Path] = typer.Option(None, "--output", "-o", help="保存路径（文件路径或目标文件夹，默认当前目录）。"),
+    force: bool = typer.Option(False, "--force", "-f", help="若文件已存在是否覆盖，默认已存在则跳过并返回路径。"),
+    with_danmaku: bool = typer.Option(False, "--danmaku", "-d", help="同时下载弹幕文件（.xml 格式）。"),
+    with_subtitle: bool = typer.Option(False, "--subtitle", "-s", help="同时下载字幕文件（.srt 格式）。"),
+) -> None:
+    """下载视频或音频到本地文件（使用 ffmpeg 混流）。支持选择画质、编码偏好及同步下载字幕与弹幕。"""
+
+    async def body():
+        import shutil
+        import subprocess
+
+        if not shutil.which("ffmpeg"):
+            raise BiliError("invalid_argument", "下载视频流并混流需要 ffmpeg，请先安装 ffmpeg（可在 PATH 中找到）。")
+
+        from ..runtime import WEB_HEADERS
+
+        v = _video(video_id)
+        info = await v.get_info()
+        pg = _pick_page(info, page)
+        cid = pg["cid"]
+        duration = float(pg.get("duration") or 0)
+        bvid = info.get("bvid") or "video"
+        raw_title = info.get("title") or "video"
+
+        purl = await v.get_download_url(cid=cid)
+        v_stream, a_stream, best_qn, chosen_codec = _pick_download_streams(purl, quality, codec)
+
+        safe_title = re.sub(r'[\\/*?:"<>|\r\n\t]', "_", raw_title).strip()[:100]
+        page_suffix = f"_p{page}" if len(info.get("pages") or []) > 1 else ""
+        ext = ".m4a" if audio_only else ".mp4"
+        default_filename = f"{safe_title}_{bvid}{page_suffix}{ext}"
+
+        if output_path is not None:
+            out_p = Path(output_path)
+            if out_p.is_dir() or str(output_path).endswith(("/", "\\")):
+                dest = out_p / default_filename
+            else:
+                dest = out_p
+        else:
+            dest = Path.cwd() / default_filename
+
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        resolved_quality = QUALITY_NAMES.get(best_qn, f"{best_qn}p")
+
+        if output.settings.dry_run:
+            return {
+                "dry_run": True,
+                "action": "video.download",
+                "params": {
+                    "bvid": bvid,
+                    "title": raw_title,
+                    "page": page,
+                    "quality": resolved_quality if not audio_only else "audio",
+                    "codec": chosen_codec if not audio_only else "aac/m4a",
+                    "target_file": str(dest.resolve()),
+                    "audio_only": audio_only,
+                    "with_danmaku": with_danmaku,
+                    "with_subtitle": with_subtitle,
+                },
+            }
+
+        if dest.exists() and not force and dest.stat().st_size > 1000:
+            return {
+                "bvid": bvid,
+                "title": raw_title,
+                "page": page,
+                "part_title": pg.get("part") or "",
+                "quality": resolved_quality if not audio_only else "audio",
+                "codec": chosen_codec if not audio_only else "aac/m4a",
+                "path": str(dest.resolve()),
+                "size": dest.stat().st_size,
+                "duration": duration,
+                "cached": True,
+                "message": "文件已存在（如需覆盖重新下载请加 --force）。",
+            }
+
+        headers = "".join(f"{k}: {v}\r\n" for k, v in WEB_HEADERS.items())
+        tmp_dest = dest.with_name(f"{dest.stem}.part{dest.suffix}")
+        if tmp_dest.exists():
+            tmp_dest.unlink()
+
+        a_url = (a_stream.get("baseUrl") or a_stream.get("base_url")) if a_stream else None
+        v_url = (v_stream.get("baseUrl") or v_stream.get("base_url")) if v_stream else None
+
+        if audio_only:
+            if not a_url:
+                raise BiliError("not_found", "该视频没有独立的音频流。")
+            output.info(f"下载音频: {safe_title} -> {dest.name}")
+            cmd = [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-headers", headers, "-i", a_url,
+                "-c", "copy", str(tmp_dest),
+            ]
+        elif a_url and v_url:
+            output.info(f"下载音视频 [{resolved_quality}]: {safe_title} -> {dest.name}")
+            cmd = [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-headers", headers, "-i", v_url,
+                "-headers", headers, "-i", a_url,
+                "-c", "copy", str(tmp_dest),
+            ]
+        elif v_url:
+            output.info(f"下载视频 [{resolved_quality}]: {safe_title} -> {dest.name}")
+            cmd = [
+                "ffmpeg", "-nostdin", "-y", "-loglevel", "error",
+                "-headers", headers, "-i", v_url,
+                "-c", "copy", str(tmp_dest),
+            ]
+        else:
+            raise BiliError("not_found", "没有可用的视频或音频流地址。")
+
+        proc = await asyncio.to_thread(subprocess.run, cmd, stdin=subprocess.DEVNULL, capture_output=True)
+        if proc.returncode != 0 or not tmp_dest.exists() or tmp_dest.stat().st_size < 1000:
+            err_msg = proc.stderr.decode("utf-8", errors="replace")[-500:]
+            if tmp_dest.exists():
+                tmp_dest.unlink()
+            raise BiliError("network_error", f"视频下载合并失败：{err_msg}")
+
+        tmp_dest.replace(dest)
+
+        sub_path = None
+        if with_subtitle:
+            try:
+                subs = (await v.get_subtitle(cid=cid) or {}).get("subtitles") or []
+                if subs:
+                    sub_url = subs[0].get("subtitle_url") or ""
+                    if sub_url.startswith("//"):
+                        sub_url = "https:" + sub_url
+                    async with httpx.AsyncClient(timeout=20) as client:
+                        resp = await client.get(sub_url)
+                        if resp.status_code == 200:
+                            body_items = resp.json().get("body") or []
+                            srt_content = _to_srt(body_items)
+                            sub_file = dest.with_suffix(".srt")
+                            sub_file.write_text(srt_content, encoding="utf-8")
+                            sub_path = str(sub_file.resolve())
+            except Exception as exc:  # noqa: BLE001
+                output.info(f"字幕下载失败（跳过）：{exc}")
+
+        dm_path = None
+        if with_danmaku:
+            try:
+                dms = await v.get_danmakus(page_index=page - 1)
+                if dms:
+                    dm_file = dest.with_suffix(".xml")
+                    dm_file.write_text(_to_danmaku_xml(dms), encoding="utf-8")
+                    dm_path = str(dm_file.resolve())
+            except Exception as exc:  # noqa: BLE001
+                output.info(f"弹幕下载失败（跳过）：{exc}")
+
+        result: dict[str, Any] = {
+            "bvid": bvid,
+            "title": raw_title,
+            "page": page,
+            "part_title": pg.get("part") or "",
+            "quality": resolved_quality if not audio_only else "audio",
+            "codec": chosen_codec if not audio_only else "aac/m4a",
+            "path": str(dest.resolve()),
+            "size": dest.stat().st_size,
+            "duration": duration,
+            "cached": False,
+        }
+        if sub_path:
+            result["subtitle_path"] = sub_path
+        if dm_path:
+            result["danmaku_path"] = dm_path
+        return result
+
+    run(body, deadline=None)

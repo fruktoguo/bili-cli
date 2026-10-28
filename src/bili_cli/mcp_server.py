@@ -85,6 +85,27 @@ def build_server():
         _flag(args, "--record", record)
         return call(args, timeout=1800)
 
+    @server.tool(annotations=read, description="下载哔哩哔哩视频或音频到本地文件（支持选择画质、仅下载音频、外挂字幕与弹幕）。")
+    def download_video(
+        video: str,
+        page: int = 1,
+        quality: str = "best",
+        codec: str = "h264",
+        audio_only: bool = False,
+        output_path: str | None = None,
+        force: bool = False,
+        danmaku: bool = False,
+        subtitle: bool = False,
+    ) -> dict:
+        args = ["video", "download", video, "--page", str(page), "--quality", quality, "--codec", codec]
+        _flag(args, "--audio-only", audio_only)
+        _flag(args, "--force", force)
+        _flag(args, "--danmaku", danmaku)
+        _flag(args, "--subtitle", subtitle)
+        if output_path:
+            args += ["--output", output_path]
+        return call(args, timeout=3600)
+
     @server.tool(annotations=read, description="视频字幕纯文本（没有字幕时可用 run_bili 调 video transcribe）。")
     def video_transcript(video: str, page: int = 1) -> dict:
         return call(["video", "subtitle", video, "--page", str(page), "--text"])

@@ -192,3 +192,16 @@ bili data diagnose --size 10           # 最近 10 个稿件的诊断指标横�
 - **播放持平、互动高**：内容质量在线但分发不够，参考 `versus_peers`，再想想分区和投稿时间。
 - **粉丝画像和你想的不一样**：`bili data audience` 的兴趣标签来自 B 站自己的统计，按它调整选题比凭感觉准。
 - **某天突然涨/跌**：`bili data trend --type play` 找到那天，再用 `bili data videos` 看当天哪个稿件在涨。
+
+## 9. 视频与素材下载（用于创作、配音与对标剪辑）
+
+```bash
+bili video download <BV>                         # 默认下载最高画质（MP4 格式，含音视频混流）
+bili video download <BV> -q 720p -o ./downloads  # 指定 720p 画质并存放到目标目录
+bili video download <BV> --audio-only            # 仅提取音频（.m4a 格式，秒级完成免重编码）
+bili video download <BV> --subtitle --danmaku    # 视频下载同时提取 .srt 外挂字幕与 .xml 弹幕
+```
+
+- **画质参数**：`--quality` / `-q` 支持 `best`（默认）、`1080p`、`720p`、`480p`、`360p`。
+- **重复检测**：本地已存在且完整时直接返回已有路径（`cached: true`）；需要强制重新下载时加 `--force` / `-f`。
+- **分 P 视频**：多 P 视频通过 `--page` / `-p` 指定下载分 P（默认第 1 P）。

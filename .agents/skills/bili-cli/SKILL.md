@@ -36,6 +36,7 @@ bili auth status          # 已登录 → 继续；not_logged_in → 走下面�
 | 刷视频找内容 | `bili feed recommend --unseen`、`bili hot popular --unseen`、`bili hot search`、`bili search video <关键词>` |
 | 看懂一个视频 | `bili video watch <BV>`（信息 + AI 总结 + 全文 + 热评 + 弹幕高能时刻 + 画面总览图，一次拿全；总览图每帧下方是观众对这个画面的弹幕反应） |
 | 看观众在哪儿反应最大 | `bili video danmaku <BV> --peaks 5`；要画面就 `bili video frames <BV> --peaks 5`（`-q hd` 精确帧） |
+| 下载视频/音频（素材采集） | `bili video download <BV>`（`-q 1080p/720p/360p` 选画质、`-a` 仅音频、`-s` 字幕、`-d` 弹幕、`-o` 指定路径） |
 | 发评论 / @ 人 / 带图 | `bili comment post <BV> "内容[笑哭]" --at owner --at 昵称 --image a.png` |
 | 找能用的表情 | `bili comment emotes -k 笑`（表情文字直接写进正文） |
 | 看评论里的图片 | `comment list` 的 `images` 给出地址，`bili comment images <url>` 存到本地再看 |

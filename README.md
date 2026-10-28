@@ -191,6 +191,7 @@ bili mcp install --yes      # 写入配置（先备份为 .bak，只改 bili-cli
 | `bili auth login / status / logout` | 扫码登录、登录状态（自动续期）、登出 |
 | `bili video info / stats / subtitle / danmaku / summary / chapters` | 视频信息、数据、字幕、弹幕（`--peaks N` 只看观众反应最强烈的时刻）、AI 总结、分段章节 |
 | `bili video watch` | 一次拿全：信息 + 标签 + AI 总结 + 全文 + 章节 + 热评 + 弹幕高能时刻 + 带弹幕反应的画面总览图；`--record` 写入历史记录 |
+| `bili video download` | 下载视频或音频到本地文件（使用 ffmpeg 混流；支持 `-q 1080p/720p/360p` 选画质、`-a` 仅音频、`-s` 字幕、`-d` 弹幕、`-o` 目标路径） |
 | `bili video like / coin / fav / triple / relation` | 点赞、投币（必须指定个数，每天最多 5 个）、收藏、一键三连、查看我和视频的关系 |
 | `bili me favs` | 我的收藏夹 |
 | `bili video frames` | 抽帧并拼总览图：默认用进度条缩略图（快、免 ffmpeg），`-q hd` 精确帧；`--danmaku` 每帧附弹幕反应，`--peaks N` 在弹幕最密集的 N 个时刻取帧 |
