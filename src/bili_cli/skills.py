@@ -88,8 +88,10 @@ COVERED_BY_STANDARD = {
 
 def project_targets(cwd: Path) -> list[Target]:
     return [
+        Target("project-agent", lambda: cwd / ".agent", always=True),
         Target("project-agents", lambda: cwd / ".agents", always=True),
         Target("project-claude", lambda: cwd / ".claude", always=True),
+        Target("project-omp", lambda: cwd / ".omp", always=True),
     ]
 
 

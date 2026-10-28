@@ -20,7 +20,10 @@ Guidance for AI coding agents working **on** this repository. (To *use* bili-cli
 3. **Keep output small**: agents pay for every token. Prefer compact cards and ready-to-run follow-up commands (see `reply_with`).
 4. **Never** add downloading, paid content, captcha / risk-control / signature circumvention, multi-account automation, engagement farming or mass messaging (see DISCLAIMER.md).
 5. **Tests are offline.** Mock HTTP with `httpx.MockTransport` or monkeypatch functions. Anything that touches the home directory must use a temp dir; never write to the real `~/.agents`, `~/.claude` or the user's config dir from tests.
-6. When command behaviour changes, update `skills/bili-cli/` and the README; `references/commands.md` is generated at install time.
+6. **Synchronous Skill Updates (Mandatory).** When any command, argument, output structure, or error behavior changes, you MUST synchronously update:
+   - Source skill files in `skills/bili-cli/` (`SKILL.md`, `references/workflows.md`, `references/safety.md`, `references/errors.md`).
+   - Project-level agent skills by running `python -m bili_cli.main skills install --project --yes` (this auto-updates `.agent/skills/bili-cli`, `.agents/skills/bili-cli`, `.claude/skills/bili-cli`, `.omp/skills/bili-cli` and regenerates `references/commands.md`).
+   - `README.md` / `README_EN.md` if public CLI flags or features changed.
 
 ## Commands
 
@@ -28,4 +31,5 @@ Guidance for AI coding agents working **on** this repository. (To *use* bili-cli
 pip install -e ".[dev]"
 pytest -q
 bili schema --pretty      # every command, option and error code
+bili skills install --project --yes # sync project skills (.agent, .agents, .claude, .omp)
 ```
